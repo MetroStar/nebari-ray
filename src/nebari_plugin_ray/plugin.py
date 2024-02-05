@@ -92,11 +92,6 @@ class RayStage(NebariTerraformStage):
             chart_ns = self.config.namespace
             create_ns = False
 
-        worker_raw = self.config.ray.workers
-        workers_dict = {k: to_dict(v) for (k, v) in self.config.ray.workers.items()}
-        print(f"[Ray] > workers (raw) {worker_raw}")
-        print(f"[Ray] > workers (dict) {workers_dict}")
-
         return {
             "name": self.config.ray.name,
             "domain": domain,
@@ -105,7 +100,7 @@ class RayStage(NebariTerraformStage):
             "client_id": self.config.ray.name,
             "base_url": f"https://{domain}{self.config.ray.ingress.path}",
             "external_url": keycloak_url,
-            "valid_redirect_uris": [f"https://{domain}{self.config.ray.ingress.path}/oauth-authorized/keycloak"],
+            "valid_redirect_uris": [f"https://{domain}{self.config.ray.ingress.path}/oauth2/callback"],
             "create_namespace": create_ns,
             "namespace": chart_ns,
             "overrides": self.config.ray.values,
@@ -119,5 +114,5 @@ class RayStage(NebariTerraformStage):
             "cluster_name": self.config.escaped_project_name,
             "cluster_oidc_issuer_url": cluster_oidc_issuer_url,
             "log_level": self.config.ray.logLevel,
-            "insecure": self.config.ray.insecure,
+            "insecure": self.config.ray.insecure
         }

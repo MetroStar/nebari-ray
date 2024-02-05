@@ -8,7 +8,6 @@ locals {
   base_url                = var.base_url
   valid_redirect_uris     = var.valid_redirect_uris
   external_url            = var.external_url
-  signing_key_ref         = var.signing_key_ref
   cluster_oidc_issuer_url = var.cluster_oidc_issuer_url
 
   log_level = var.log_level
@@ -27,9 +26,7 @@ locals {
 
   chart_namespace = local.create_namespace ? kubernetes_namespace.this[0].metadata[0].name : local.namespace
 
-  signing_key = local.ingress.enabled && local.auth_enabled ? (local.signing_key_ref == null
-    ? random_password.signing_key[0].result
-  : one([for e in data.kubernetes_resource.signing_key[0].object.spec.template.spec.containers[0].env : e.value if e.name == "SECRET"])) : ""
+  signing_key = random_id.signing_key[0].b64_std
 
   # not sure what these would need to be for other clouds
   default_nodeselector = {
@@ -109,7 +106,7 @@ resource "helm_release" "ray_cluster" {
         containerEnv = concat([
           {
             name  = "RAY_GRAFANA_HOST"
-            value = "http://nebari-grafana.dev"
+            value = "https://${local.domain}/monitoring"
           },
           {
             name  = "RAY_PROMETHEUS_HOST"
@@ -165,26 +162,16 @@ resource "helm_release" "ray_cluster" {
         )
         volumes = [
           {
-            name = "log-volume"
+            name     = "log-volume"
             emptyDir = {}
           }
         ]
         volumeMounts = [
           {
-            name = "log-volume"
+            name      = "log-volume"
             mountPath = "/tmp/ray"
           }
         ]
-        # labels = {}
-        # annotations = {}
-        # tolerations = []
-        # rayStartParams = {}
-        # envFrom = []
-        # affinity = {}
-        # securityContext = {}
-        # sidecarContainers = []
-        # command = []
-        # args = []
       } }
     }),
     yamlencode(lookup(local.overrides, "ray-cluster", {})),
@@ -210,23 +197,30 @@ resource "keycloak_openid_client" "this" {
   web_origins                  = ["+"]
 }
 
-data "kubernetes_resource" "signing_key" {
-  count = local.ingress.enabled && local.auth_enabled && local.signing_key_ref != null ? 1 : 0
+resource "keycloak_openid_audience_protocol_mapper" "this" {
+  count = local.auth_enabled ? 1 : 0
 
-  api_version = "apps/v1"
-  kind        = local.signing_key_ref.kind == null ? "Deployment" : local.signing_key_ref.kind
+  realm_id  = local.realm_id
+  client_id = keycloak_openid_client.this[0].id
+  name      = "audience"
 
-  metadata {
-    namespace = local.signing_key_ref.namespace
-    name      = local.signing_key_ref.name
-  }
+  included_client_audience = keycloak_openid_client.this[0].name
 }
 
-resource "random_password" "signing_key" {
-  count = local.auth_enabled && local.signing_key_ref == null ? 1 : 0
+resource "keycloak_openid_group_membership_protocol_mapper" "this" {
+  count = local.auth_enabled ? 1 : 0
 
-  length  = 32
-  special = false
+  realm_id  = local.realm_id
+  client_id = keycloak_openid_client.this[0].id
+  name      = "groups"
+
+  claim_name = "groups"
+}
+
+resource "random_id" "signing_key" {
+  count = local.auth_enabled ? 1 : 0
+
+  byte_length = 32
 }
 
 resource "kubernetes_service_account" "head" {

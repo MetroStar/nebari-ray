@@ -12,31 +12,58 @@ resource "kubernetes_manifest" "ingressroute" {
       entryPoints = [
         "websecure",
       ]
-      routes = [
+      routes = concat(local.auth_enabled ? [
         {
           kind  = "Rule"
-          match = "Host(`${local.domain}`) && PathPrefix(`${local.ingress.path}`)"
-          middlewares = concat(local.auth_enabled ? [
+          match = "Host(`${local.domain}`) && PathPrefix(`${local.ingress.path}/oauth2/`)"
+          middlewares = [
             {
-              name      = "${local.name}-traefik-forward-auth"
+              name      = "${local.name}-oauth-errors"
               namespace = local.chart_namespace
-            }
-            ] : [], [
-            {
-              name      = "${local.name}-stripprefix"
-              namespace = local.chart_namespace
-            }
-          ])
-          services = [
-            {
-              name           = "${local.name}-cluster-kuberay-head-svc"
-              passHostHeader = true
-              port           = 8265
             }
           ]
-        }
-      ]
+          services = [
+            {
+              name           = "${local.name}-oauth2-proxy"
+              passHostHeader = true
+              port           = 4180
+            }
+          ]
+        }] : [],
+        [
+          {
+            kind  = "Rule"
+            match = "Host(`${local.domain}`) && PathPrefix(`${local.ingress.path}`)"
+            middlewares = concat(local.auth_enabled ? [
+              {
+                name      = "${local.name}-oauth-errors"
+                namespace = local.chart_namespace
+              },
+              {
+                name      = "${local.name}-oauth2-proxy"
+                namespace = local.chart_namespace
+              },
+              ] : [], [
+              {
+                name      = "${local.name}-stripprefix"
+                namespace = local.chart_namespace
+              }
+            ])
+            services = [
+              {
+                name           = "${local.name}-cluster-kuberay-head-svc"
+                passHostHeader = true
+                port           = 8265
+              }
+            ]
+          }
+        ]
+      )
     }
+  }
+
+  field_manager {
+    force_conflicts = true
   }
 }
 
@@ -65,10 +92,10 @@ resource "kubernetes_deployment" "auth" {
   count = local.ingress.enabled && local.auth_enabled ? 1 : 0
 
   metadata {
-    name      = "${local.name}-traefik-forward-auth"
+    name      = "${local.name}-oauth2-proxy"
     namespace = local.namespace
     labels = {
-      app = "${local.name}-traefik-forward-auth"
+      app = "${local.name}-oauth2-proxy"
     }
   }
 
@@ -77,14 +104,19 @@ resource "kubernetes_deployment" "auth" {
 
     selector {
       match_labels = {
-        app = "${local.name}-traefik-forward-auth"
+        app = "${local.name}-oauth2-proxy"
       }
     }
 
     template {
       metadata {
         labels = {
-          app = "${local.name}-traefik-forward-auth"
+          app = "${local.name}-oauth2-proxy"
+        }
+        annotations = {
+          "checksum/plugin-secrets-sha256" = base64sha256(
+            jsonencode(kubernetes_secret.auth[0].data)
+          )
         }
       }
 
@@ -96,32 +128,31 @@ resource "kubernetes_deployment" "auth" {
 
         container {
           name  = "main"
-          image = "thomseddon/traefik-forward-auth:2"
+          image = "quay.io/oauth2-proxy/oauth2-proxy:v7.5.1"
+
+          args = [
+            "--provider=keycloak-oidc",
+            "--proxy-prefix=${local.ingress.path}/oauth2",
+            "--redirect-url=https://${local.domain}${local.ingress.path}/oauth2/callback",
+            "--email-domain=*",
+            "--upstream=http://${local.name}-cluster-kuberay-head-svc.ray:8265",
+            "--http-address=0.0.0.0:4180",
+            "--pass-user-headers=true",
+            "--pass-access-token=true",
+            "--set-authorization-header=true",
+            "--set-xauthrequest=true",
+            "--reverse-proxy=true",
+            "--code-challenge-method=S256",
+            # "--skip-provider-button",
+            "--silence-ping-logging",
+            "--insecure-oidc-allow-unverified-email",
+            local.insecure ? "--ssl-insecure-skip-verify" : "",
+          ]
 
           port {
-            container_port = 4181
+            container_port = 4180
             protocol       = "TCP"
             name           = "http"
-          }
-
-          env {
-            name  = "LOG_LEVEL"
-            value = local.log_level
-          }
-
-          env {
-            name  = "INSECURE_COOKIE"
-            value = local.insecure ? "true" : "false"
-          }
-
-          env {
-            name  = "URL_PATH"
-            value = "${local.ingress.path}/_oauth"
-          }
-
-          env {
-            name  = "DEFAULT_PROVIDER"
-            value = "oidc"
           }
 
           env_from {
@@ -144,17 +175,21 @@ resource "kubernetes_secret" "auth" {
   }
 
   data = {
-    PROVIDERS_OIDC_CLIENT_ID     = keycloak_openid_client.this[0].client_id
-    PROVIDERS_OIDC_CLIENT_SECRET = keycloak_openid_client.this[0].client_secret
-    SECRET                       = local.signing_key
+    OAUTH2_PROXY_CLIENT_ID       = keycloak_openid_client.this[0].client_id
+    OAUTH2_PROXY_CLIENT_SECRET   = keycloak_openid_client.this[0].client_secret
+    OAUTH2_PROXY_OIDC_ISSUER_URL = "${local.external_url}realms/${local.realm_id}"
 
-    PROVIDERS_OIDC_ISSUER_URL = "${local.external_url}realms/${local.realm_id}"
-    discovery_url             = "${local.external_url}realms/${local.realm_id}/.well-known/openid-configuration"
-    auth_url                  = "${local.external_url}realms/${local.realm_id}/protocol/openid-connect/auth"
-    token_url                 = "${local.external_url}realms/${local.realm_id}/protocol/openid-connect/token"
-    jwks_url                  = "${local.external_url}realms/${local.realm_id}/protocol/openid-connect/certs"
-    logout_url                = "${local.external_url}realms/${local.realm_id}/protocol/openid-connect/logout"
-    userinfo_url              = "${local.external_url}realms/${local.realm_id}/protocol/openid-connect/userinfo"
+    OAUTH2_PROXY_COOKIE_SECRET     = local.signing_key
+
+    # https://github.com/oauth2-proxy/oauth2-proxy/issues/1297
+    # OAUTH2_PROXY_FOOTER = "<script>(function(){var rd=document.getElementsByName('rd');for(var i=0;i<rd.length;i++)rd[i].value=window.location.toString().split('${local.ingress.path}/oauth2')[0]})()</script>"
+
+    discovery_url = "${local.external_url}realms/${local.realm_id}/.well-known/openid-configuration"
+    auth_url      = "${local.external_url}realms/${local.realm_id}/protocol/openid-connect/auth"
+    token_url     = "${local.external_url}realms/${local.realm_id}/protocol/openid-connect/token"
+    jwks_url      = "${local.external_url}realms/${local.realm_id}/protocol/openid-connect/certs"
+    logout_url    = "${local.external_url}realms/${local.realm_id}/protocol/openid-connect/logout"
+    userinfo_url  = "${local.external_url}realms/${local.realm_id}/protocol/openid-connect/userinfo"
   }
 }
 
@@ -163,7 +198,7 @@ resource "kubernetes_service" "auth" {
   count = local.ingress.enabled && local.auth_enabled ? 1 : 0
 
   metadata {
-    name      = "${local.name}-traefik-forward-auth"
+    name      = "${local.name}-oauth2-proxy"
     namespace = local.namespace
   }
   spec {
@@ -172,7 +207,7 @@ resource "kubernetes_service" "auth" {
     }
 
     port {
-      port        = 4181
+      port        = 4180
       target_port = "http"
       protocol    = "TCP"
       name        = "http"
@@ -182,23 +217,62 @@ resource "kubernetes_service" "auth" {
   }
 }
 
-resource "kubernetes_manifest" "auth" {
+resource "kubernetes_manifest" "oauth2_errors" {
   count = local.ingress.enabled && local.auth_enabled ? 1 : 0
 
   manifest = {
     apiVersion = "traefik.containo.us/v1alpha1"
     kind       = "Middleware"
     metadata = {
-      name      = "${local.name}-traefik-forward-auth"
+      name      = "${local.name}-oauth-errors"
+      namespace = local.namespace
+    }
+    spec = {
+      errors = {
+        status = [
+          "401-403"
+        ]
+        service = {
+          name = "${local.name}-oauth2-proxy"
+          port = 4180
+        }
+        query = "${local.ingress.path}/oauth2/sign_in?rd={url}"
+        # query = "${local.ingress.path}/oauth2/start?rd={url}"
+      }
+    }
+  }
+
+  field_manager {
+    force_conflicts = true
+  }
+}
+
+resource "kubernetes_manifest" "oauth2_proxy" {
+  count = local.ingress.enabled && local.auth_enabled ? 1 : 0
+
+  manifest = {
+    apiVersion = "traefik.containo.us/v1alpha1"
+    kind       = "Middleware"
+    metadata = {
+      name      = "${local.name}-oauth2-proxy"
       namespace = local.namespace
     }
     spec = {
       forwardAuth = {
-        address = "http://${local.name}-traefik-forward-auth.${local.chart_namespace}:4181/"
+        # address            = "http://${local.name}-oauth2-proxy.${local.chart_namespace}:4180${local.ingress.path}/oauth2/start?rd={url}"
+        address            = "http://${local.name}-oauth2-proxy.${local.chart_namespace}:4180${local.ingress.path}/oauth2/auth"
+        trustForwardHeader = true
         authResponseHeaders = [
-          "X-Forwarded-User",
+          "X-Auth-Request-User",
+          "X-Auth-Request-Access-Token",
+          "Set-Cookie",
+          "Authorization",
         ]
       }
     }
+  }
+
+  field_manager {
+    force_conflicts = true
   }
 }

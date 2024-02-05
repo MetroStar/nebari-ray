@@ -55,16 +55,6 @@ variable "namespace" {
   type = string
 }
 
-variable "signing_key_ref" {
-  description = ""
-  type = object({
-    name      = string
-    kind      = optional(string, "Deployment")
-    namespace = string
-  })
-  default = null
-}
-
 variable "ingress" {
   type = object({
     enabled = optional(bool, true)
