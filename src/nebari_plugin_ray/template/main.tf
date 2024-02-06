@@ -15,6 +15,7 @@ locals {
 
   create_namespace = var.create_namespace
   namespace        = var.namespace
+  nebari_namespace = var.nebari_namespace
   overrides        = var.overrides
   ingress          = var.ingress
   auth_enabled     = var.auth_enabled
@@ -26,7 +27,7 @@ locals {
 
   chart_namespace = local.create_namespace ? kubernetes_namespace.this[0].metadata[0].name : local.namespace
 
-  signing_key = random_id.signing_key[0].b64_std
+  signing_key = local.auth_enabled ? random_password.signing_key[0].result : ""
 
   # not sure what these would need to be for other clouds
   default_nodeselector = {
@@ -40,11 +41,7 @@ locals {
     }
   }
 
-  # TODO
-  operator = {
-    enabled = true
-    global  = false
-  }
+  operator = var.operator
 }
 
 resource "kubernetes_namespace" "this" {
@@ -71,7 +68,7 @@ resource "helm_release" "ray_operator" {
         create = true
         name   = "${local.name}-operator"
       }
-      singleNamespaceInstall = !local.operator.global
+      singleNamespaceInstall = local.operator.namespaced
       nodeSelector = (length(local.head.nodeSelector) > 0 ?
         local.head.nodeSelector :
         try(local.default_nodeselector[local.provider].default, {})
@@ -82,14 +79,9 @@ resource "helm_release" "ray_operator" {
 }
 
 resource "helm_release" "ray_cluster" {
-  count = local.operator.enabled ? 1 : 0
-
   name      = "${local.name}-cluster"
+  chart     = "./chart/ray-cluster"
   namespace = local.chart_namespace
-
-  repository = "https://ray-project.github.io/kuberay-helm/"
-  chart      = "ray-cluster"
-  version    = "1.0.0"
 
   values = [
     yamlencode({
@@ -106,11 +98,11 @@ resource "helm_release" "ray_cluster" {
         containerEnv = concat([
           {
             name  = "RAY_GRAFANA_HOST"
-            value = "https://${local.domain}/monitoring"
+            value = "http://nebari-grafana.${local.nebari_namespace}"
           },
           {
             name  = "RAY_PROMETHEUS_HOST"
-            value = "http://nebari-kube-prometheus-sta-prometheus.onyx:9090"
+            value = "http://nebari-kube-prometheus-sta-prometheus.${local.nebari_namespace}:9090"
           },
           {
             name  = "RAY_PROMETHEUS_NAME"
@@ -217,10 +209,11 @@ resource "keycloak_openid_group_membership_protocol_mapper" "this" {
   claim_name = "groups"
 }
 
-resource "random_id" "signing_key" {
+resource "random_password" "signing_key" {
   count = local.auth_enabled ? 1 : 0
 
-  byte_length = 32
+  length  = 32
+  special = false
 }
 
 resource "kubernetes_service_account" "head" {

@@ -30,6 +30,11 @@ class RayNodeConfig(Base):
     resources: Optional[Dict[str, Any]] = {}
 
 
+class RayOperatorConfig(Base):
+    enabled: Optional[bool] = True
+    namespaced: Optional[bool] = True
+
+
 class RayConfig(Base):
     name: Optional[str] = "ray"
     namespace: Optional[str] = None
@@ -40,6 +45,7 @@ class RayConfig(Base):
     extraEnv: Optional[List[RayEnvConfig]] = []
     head: Optional[RayNodeConfig] = RayNodeConfig()
     workers: Optional[Dict[str, RayNodeConfig]] = {}
+    operator: Optional[RayOperatorConfig] = RayOperatorConfig()
     logLevel: Optional[str] = "info"
     insecure: Optional[bool] = False
     values: Optional[Dict[str, Any]] = {}
@@ -98,11 +104,12 @@ class RayStage(NebariTerraformStage):
             "cloud_provider": self.config.provider,
             "realm_id": realm_id,
             "client_id": self.config.ray.name,
-            "base_url": f"https://{domain}{self.config.ray.ingress.path}",
+            "base_url": f"https://{domain}{self.config.ray.ingress.path}/",
             "external_url": keycloak_url,
             "valid_redirect_uris": [f"https://{domain}{self.config.ray.ingress.path}/oauth2/callback"],
             "create_namespace": create_ns,
             "namespace": chart_ns,
+            "nebari_namespace": self.config.namespace,
             "overrides": self.config.ray.values,
             "ingress": {"enabled": self.config.ray.ingress.enabled, "path": self.config.ray.ingress.path},
             "auth_enabled": self.config.ray.auth.enabled,
@@ -114,5 +121,6 @@ class RayStage(NebariTerraformStage):
             "cluster_name": self.config.escaped_project_name,
             "cluster_oidc_issuer_url": cluster_oidc_issuer_url,
             "log_level": self.config.ray.logLevel,
-            "insecure": self.config.ray.insecure
+            "insecure": self.config.ray.insecure,
+            "operator": self.config.ray.operator.__dict__
         }

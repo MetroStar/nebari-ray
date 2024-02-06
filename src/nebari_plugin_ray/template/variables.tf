@@ -55,6 +55,10 @@ variable "namespace" {
   type = string
 }
 
+variable "nebari_namespace" {
+  type = string
+}
+
 variable "ingress" {
   type = object({
     enabled = optional(bool, true)
@@ -150,4 +154,15 @@ variable "log_level" {
 variable "insecure" {
   type    = bool
   default = false
+}
+
+variable "operator" {
+  type = object({
+    enabled    = optional(bool, true)
+    namespaced = optional(bool, true)
+  })
+  default = {
+    enabled    = true
+    namespaced = true
+  }
 }
