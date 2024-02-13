@@ -170,7 +170,7 @@ variable "operator" {
 variable "autoscaler" {
   type = object({
     enabled            = optional(bool, true)
-    idleTimeoutSeconds = optional(int, 300)
+    idleTimeoutSeconds = optional(number, 300)
   })
   default = {
     enabled            = true
