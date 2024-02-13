@@ -35,6 +35,11 @@ class RayOperatorConfig(Base):
     namespaced: Optional[bool] = True
 
 
+class RayAutoscalerConfig(Base):
+    enabled: Optional[bool] = True
+    idleTimeoutSeconds: Optional[int] = 300
+
+
 class RayConfig(Base):
     name: Optional[str] = "ray"
     namespace: Optional[str] = None
@@ -46,6 +51,7 @@ class RayConfig(Base):
     head: Optional[RayNodeConfig] = RayNodeConfig()
     workers: Optional[Dict[str, RayNodeConfig]] = {}
     operator: Optional[RayOperatorConfig] = RayOperatorConfig()
+    autoscaler: Optional[RayAutoscalerConfig] = RayAutoscalerConfig()
     logLevel: Optional[str] = "info"
     insecure: Optional[bool] = False
     values: Optional[Dict[str, Any]] = {}
@@ -122,5 +128,6 @@ class RayStage(NebariTerraformStage):
             "cluster_oidc_issuer_url": cluster_oidc_issuer_url,
             "log_level": self.config.ray.logLevel,
             "insecure": self.config.ray.insecure,
-            "operator": self.config.ray.operator.__dict__
+            "operator": self.config.ray.operator.__dict__,
+            "autoscaler": self.config.ray.autoscaler.__dict__,
         }

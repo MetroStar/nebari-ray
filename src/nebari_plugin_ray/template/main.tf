@@ -24,6 +24,7 @@ locals {
   python_version   = var.python_version
   head             = var.head
   workers          = var.workers
+  autoscaler       = var.autoscaler
 
   chart_namespace = local.create_namespace ? kubernetes_namespace.this[0].metadata[0].name : local.namespace
 
@@ -90,9 +91,10 @@ resource "helm_release" "ray_cluster" {
         tag        = "${local.ray_version}-py${replace(local.python_version, ".", "")}"
       }
       head = {
-        rayVersion = local.ray_version
+        rayVersion              = local.ray_version
+        enableInTreeAutoscaling = local.autoscaler.enabled
         autoscalerOptions = {
-          idleTimeoutSeconds = 300
+          idleTimeoutSeconds = local.autoscaler.idleTimeoutSeconds
         }
         serviceAccountName = kubernetes_service_account.head.metadata[0].name
         containerEnv = concat([
